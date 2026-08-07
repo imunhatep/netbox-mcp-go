@@ -1,0 +1,84 @@
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check gofmt
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l cmd internal)"
+          if [ -n "${unformatted}" ]; then
+            echo "::error::gofmt needed on:"
+            echo "${unformatted}"
+            exit 1
+          fi
+
+      # Dependencies are vendored, so the tree must match go.mod/go.sum.
+      - name: Verify vendor is in sync
+        run: |
+          set -euo pipefail
+          if [ ! -d vendor ]; then
+            echo "vendor/ absent; skipping"
+            exit 0
+          fi
+          go mod vendor
+          dirty="$(git status --porcelain -- vendor go.mod go.sum)"
+          if [ -n "${dirty}" ]; then
+            echo "::error::'go mod vendor' changed the tree; commit the result"
+            echo "${dirty}"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Build
+        run: make build
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build only; publishing happens in the release workflow.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Containerfile
+          push: false
+          build-args: |
+            VERSION=ci
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
