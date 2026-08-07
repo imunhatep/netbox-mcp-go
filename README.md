@@ -38,6 +38,19 @@ Endpoints:
 
 ### Container
 
+Published image (`NETBOX_URL`/`NETBOX_TOKEN` are passed through from the
+current shell environment):
+
+```sh
+podman run --rm -d \
+  --name netbox-mcp \
+  -e NETBOX_URL \
+  -e NETBOX_TOKEN \
+  -p 127.0.0.1:3031:3031 ghcr.io/imunhatep/netbox-mcp-go:latest
+```
+
+Local build:
+
 ```sh
 make image
 podman run --rm -p 3031:3031 \
