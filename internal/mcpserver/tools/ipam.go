@@ -14,8 +14,8 @@ type IPAMBackend interface {
 	GetPrefix(ctx context.Context, ref string) (netboxx.Object, error)
 	ListIPAddresses(ctx context.Context, f netboxx.IPFilter, page int) (*netboxx.Page, error)
 	GetIPAddress(ctx context.Context, ref string) (netboxx.Object, error)
-	ListVLANs(ctx context.Context, search, site, vid string, brief bool, page int) (*netboxx.Page, error)
-	ListVRFs(ctx context.Context, search string, brief bool, page int) (*netboxx.Page, error)
+	ListVLANs(ctx context.Context, f netboxx.VLANFilter, page int) (*netboxx.Page, error)
+	ListVRFs(ctx context.Context, f netboxx.VRFFilter, page int) (*netboxx.Page, error)
 }
 
 // RegisterIPAM adds prefix, IP address, VLAN and VRF tools and returns their names.
@@ -124,8 +124,13 @@ func RegisterIPAM(s *server.MCPServer, b IPAMBackend) []string {
 		mcp.WithBoolean("brief", mcp.Description(briefDesc)),
 		mcp.WithNumber("page", mcp.Description("1-based page number")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		res, err := b.ListVLANs(ctx, req.GetString("search", ""), req.GetString("site", ""),
-			req.GetString("vid", ""), req.GetBool("brief", false), optPage(req))
+		f := netboxx.VLANFilter{
+			Search: req.GetString("search", ""),
+			Site:   req.GetString("site", ""),
+			VID:    req.GetString("vid", ""),
+			Brief:  req.GetBool("brief", false),
+		}
+		res, err := b.ListVLANs(ctx, f, optPage(req))
 		if err != nil {
 			return errResult(err)
 		}
@@ -138,7 +143,8 @@ func RegisterIPAM(s *server.MCPServer, b IPAMBackend) []string {
 		mcp.WithBoolean("brief", mcp.Description(briefDesc)),
 		mcp.WithNumber("page", mcp.Description("1-based page number")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		res, err := b.ListVRFs(ctx, req.GetString("search", ""), req.GetBool("brief", false), optPage(req))
+		f := netboxx.VRFFilter{Search: req.GetString("search", ""), Brief: req.GetBool("brief", false)}
+		res, err := b.ListVRFs(ctx, f, optPage(req))
 		if err != nil {
 			return errResult(err)
 		}

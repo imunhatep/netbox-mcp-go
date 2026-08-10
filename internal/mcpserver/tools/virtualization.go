@@ -10,10 +10,10 @@ import (
 )
 
 type VirtualizationBackend interface {
-	ListClusters(ctx context.Context, search, site string, brief bool, page int) (*netboxx.Page, error)
+	ListClusters(ctx context.Context, f netboxx.ClusterFilter, page int) (*netboxx.Page, error)
 	ListVirtualMachines(ctx context.Context, f netboxx.VMFilter, page int) (*netboxx.Page, error)
 	GetVirtualMachine(ctx context.Context, ref string) (netboxx.Object, error)
-	ListVMInterfaces(ctx context.Context, vm string, brief bool, page int) (*netboxx.Page, error)
+	ListVMInterfaces(ctx context.Context, f netboxx.VMInterfaceFilter, page int) (*netboxx.Page, error)
 }
 
 // RegisterVirtualization adds cluster and virtual machine tools and returns their names.
@@ -31,8 +31,12 @@ func RegisterVirtualization(s *server.MCPServer, b VirtualizationBackend) []stri
 		mcp.WithBoolean("brief", mcp.Description(briefDesc)),
 		mcp.WithNumber("page", mcp.Description("1-based page number")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		res, err := b.ListClusters(ctx, req.GetString("search", ""), req.GetString("site", ""),
-			req.GetBool("brief", false), optPage(req))
+		f := netboxx.ClusterFilter{
+			Search: req.GetString("search", ""),
+			Site:   req.GetString("site", ""),
+			Brief:  req.GetBool("brief", false),
+		}
+		res, err := b.ListClusters(ctx, f, optPage(req))
 		if err != nil {
 			return errResult(err)
 		}
@@ -91,7 +95,8 @@ func RegisterVirtualization(s *server.MCPServer, b VirtualizationBackend) []stri
 		if err != nil {
 			return errResult(err)
 		}
-		res, err := b.ListVMInterfaces(ctx, vm, req.GetBool("brief", false), optPage(req))
+		f := netboxx.VMInterfaceFilter{VM: vm, Brief: req.GetBool("brief", false)}
+		res, err := b.ListVMInterfaces(ctx, f, optPage(req))
 		if err != nil {
 			return errResult(err)
 		}

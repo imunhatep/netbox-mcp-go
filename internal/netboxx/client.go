@@ -47,11 +47,16 @@ func (s *Service) get(ctx context.Context, path string, query url.Values, out an
 		u += "?" + query.Encode()
 	}
 
+	token, err := s.resolveToken(ctx)
+	if err != nil {
+		return err
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Token "+s.token)
+	req.Header.Set("Authorization", authHeader(token))
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := s.httpClient.Do(req)

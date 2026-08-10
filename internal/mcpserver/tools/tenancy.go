@@ -10,10 +10,10 @@ import (
 )
 
 type TenancyBackend interface {
-	ListTenantGroups(ctx context.Context, search, parent string, brief bool, page int) (*netboxx.Page, error)
-	ListTenants(ctx context.Context, search, group string, brief bool, page int) (*netboxx.Page, error)
+	ListTenantGroups(ctx context.Context, f netboxx.TenantGroupFilter, page int) (*netboxx.Page, error)
+	ListTenants(ctx context.Context, f netboxx.TenantFilter, page int) (*netboxx.Page, error)
 	GetTenant(ctx context.Context, ref string) (netboxx.Object, error)
-	ListContacts(ctx context.Context, search, group string, brief bool, page int) (*netboxx.Page, error)
+	ListContacts(ctx context.Context, f netboxx.ContactFilter, page int) (*netboxx.Page, error)
 	Status(ctx context.Context) (netboxx.Object, error)
 }
 
@@ -33,8 +33,12 @@ func RegisterTenancy(s *server.MCPServer, b TenancyBackend) []string {
 		mcp.WithBoolean("brief", mcp.Description(briefDesc)),
 		mcp.WithNumber("page", mcp.Description("1-based page number")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		res, err := b.ListTenantGroups(ctx, req.GetString("search", ""), req.GetString("parent", ""),
-			req.GetBool("brief", false), optPage(req))
+		f := netboxx.TenantGroupFilter{
+			Search: req.GetString("search", ""),
+			Parent: req.GetString("parent", ""),
+			Brief:  req.GetBool("brief", false),
+		}
+		res, err := b.ListTenantGroups(ctx, f, optPage(req))
 		if err != nil {
 			return errResult(err)
 		}
@@ -48,8 +52,12 @@ func RegisterTenancy(s *server.MCPServer, b TenancyBackend) []string {
 		mcp.WithBoolean("brief", mcp.Description(briefDesc)),
 		mcp.WithNumber("page", mcp.Description("1-based page number")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		res, err := b.ListTenants(ctx, req.GetString("search", ""), req.GetString("group", ""),
-			req.GetBool("brief", false), optPage(req))
+		f := netboxx.TenantFilter{
+			Search: req.GetString("search", ""),
+			Group:  req.GetString("group", ""),
+			Brief:  req.GetBool("brief", false),
+		}
+		res, err := b.ListTenants(ctx, f, optPage(req))
 		if err != nil {
 			return errResult(err)
 		}
@@ -78,8 +86,12 @@ func RegisterTenancy(s *server.MCPServer, b TenancyBackend) []string {
 		mcp.WithBoolean("brief", mcp.Description(briefDesc)),
 		mcp.WithNumber("page", mcp.Description("1-based page number")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		res, err := b.ListContacts(ctx, req.GetString("search", ""), req.GetString("group", ""),
-			req.GetBool("brief", false), optPage(req))
+		f := netboxx.ContactFilter{
+			Search: req.GetString("search", ""),
+			Group:  req.GetString("group", ""),
+			Brief:  req.GetBool("brief", false),
+		}
+		res, err := b.ListContacts(ctx, f, optPage(req))
 		if err != nil {
 			return errResult(err)
 		}

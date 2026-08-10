@@ -19,6 +19,12 @@ type Config struct {
 	RequestTimeout time.Duration
 	PageSize       int
 	Verbose        int
+
+	// TokenPassthrough authenticates each MCP request to NetBox with the
+	// token from its own Authorization: Bearer header instead of NetBoxToken.
+	// It makes NetBoxToken optional (it becomes the fallback for requests
+	// that carry no header).
+	TokenPassthrough bool
 }
 
 // FromCommand builds a Config from the serve command's flags.
@@ -33,6 +39,8 @@ func FromCommand(cmd *cli.Command) *Config {
 		RequestTimeout: cmd.Duration("request-timeout"),
 		PageSize:       int(cmd.Int("page-size")),
 		Verbose:        int(cmd.Int("verbose")),
+
+		TokenPassthrough: cmd.Bool("token-passthrough"),
 	}
 }
 
@@ -41,8 +49,11 @@ func (c *Config) Validate() error {
 	if c.NetBoxURL == "" {
 		return errors.New("NETBOX_URL (--netbox-url) is required")
 	}
-	if c.NetBoxToken == "" {
-		return errors.New("NETBOX_TOKEN (--netbox-token) is required")
+	// With passthrough the token arrives per request, so a configured one is
+	// only an optional fallback.
+	if c.NetBoxToken == "" && !c.TokenPassthrough {
+		return errors.New("NETBOX_TOKEN (--netbox-token) is required " +
+			"unless --token-passthrough is set")
 	}
 	u, err := url.Parse(c.NetBoxURL)
 	if err != nil || !u.IsAbs() || u.Host == "" {

@@ -33,7 +33,7 @@ internal/netboxx          -> read-only NetBox REST client
 
 **Adding a tool** touches exactly two files: a method on `*netboxx.Service` in
 the matching domain file ([dcim.go](internal/netboxx/dcim.go), `ipam.go`,
-`virtualization.go`, `tenancy.go`), and an `add(mcp.NewTool(...), handler)`
+`virtualization.go`, `tenancy.go`, `core.go`), and an `add(mcp.NewTool(...), handler)`
 block in the mirror file under [tools/](internal/mcpserver/tools/). Also extend
 the domain's backend interface (e.g. `tools.DCIMBackend` in
 [tools/dcim.go](internal/mcpserver/tools/dcim.go)) — the tool packages depend on
@@ -44,12 +44,20 @@ these narrow interfaces, not on `*netboxx.Service`, so tests can substitute fake
 - **Full-object passthrough.** There are no DTOs: `netboxx.Object` is
   `map[string]any` and NetBox JSON is returned verbatim so `custom_fields`,
   `tags` and `comments` survive and any NetBox version works. Do not introduce
-  typed structs for NetBox objects.
+  typed structs for NetBox objects. Nothing in the codebase reads a field out of
+  a response — objects go decode → `prune()` → JSON text — so response structs
+  would add no type safety while silently dropping per-deployment
+  `custom_fields` and version-specific keys on re-marshal.
+- **Requests, by contrast, are always typed.** Every `List*` method has the
+  signature `List<Thing>(ctx, f <Thing>Filter, page int)` — one filter struct per
+  endpoint, even single-field ones (`VRFFilter`, `VMInterfaceFilter`). No
+  positional string parameters: adjacent same-typed args are silently swappable,
+  and a new filter otherwise churns the signature and both backend interfaces.
 - `prune()` recursively deletes only `url`/`display_url` keys. It is the sole
   sanctioned mutation of a response — call it on every object returned from a
   new endpoint.
 - All requests go through `Service.get()`, which prefixes `/api/`, ensures a
-  trailing slash, and sets the `Token` auth header. `list()` converts the
+  trailing slash, and sets the auth header. `list()` converts the
   1-based `page` argument into NetBox `limit`/`offset` and wraps results in
   `Page{count, page, page_size, has_next, results}`.
 - `getOne()` accepts a numeric id (direct `GET {path}/{id}/`) *or* a symbolic
@@ -61,6 +69,16 @@ these narrow interfaces, not on `*netboxx.Service`, so tests can substitute fake
 - Errors map non-2xx responses onto the sentinels in
   [errors.go](internal/netboxx/errors.go) (`ErrNotFound`, `ErrUnauthorized`,
   `ErrForbidden`, `ErrValidation`); wrap with `%w` so `errors.Is` keeps working.
+- **Auth is per request, not per Service.** [auth.go](internal/netboxx/auth.go)
+  resolves the credential for every call: a token put on the context by
+  `WithToken` wins, `Service.token` is the fallback, and no token at all is an
+  `ErrUnauthorized` before any HTTP call. `authHeader` picks the scheme from the
+  token — `Bearer` for `nbt_`-prefixed NetBox Labs Cloud tokens, `Token`
+  otherwise. Never read `s.token` directly in a request path.
+- Endpoints that moved between NetBox versions are tried newest-first with a
+  404 fallback (see `changelogPaths` in [core.go](internal/netboxx/core.go),
+  where ObjectChange moved from `extras` to `core` in NetBox 4.0). Only
+  `ErrNotFound` falls through; any other error is returned as-is.
 - [search.go](internal/netboxx/search.go) fans out concurrently over
   `searchTargets` because NetBox's REST API has no cross-type search endpoint.
   New object types should be added to that slice as well as getting their own
@@ -71,6 +89,12 @@ these narrow interfaces, not on `*netboxx.Service`, so tests can substitute fake
 One `*server.MCPServer` backs both transports: Streamable HTTP at `/mcp` and
 legacy HTTP+SSE at `/sse` + `/message`, plus `/healthz`. Both are wrapped in
 `logHTTP`, and MCP-level tool calls are logged via `mcpLogger.hooks()`.
+
+With `--token-passthrough`, both transports get a context func
+([auth.go](internal/mcpserver/auth.go)) that lifts each request's
+`Authorization: Bearer` token into the handler context for `netboxx.WithToken`,
+so callers query NetBox with their own permissions. It is off by default and
+`Authorization` is redacted in both logging layers.
 
 Tool handlers never return a Go error to the MCP layer — failures come back as
 `errResult(err)` (an `mcp.NewToolResultError`) so the model sees the message.
@@ -88,5 +112,9 @@ tools without an explicit request.
 - [internal/mcpserver/integration_test.go](internal/mcpserver/integration_test.go)
   — drives the real JSON-RPC handshake (`initialize` → `Mcp-Session-Id` →
   `tools/list` / `tools/call`) over `httptest`. New tools should show up here.
+- [internal/mcpserver/auth_test.go](internal/mcpserver/auth_test.go) — token
+  passthrough end to end through `newMux`: which Authorization header NetBox
+  ends up seeing for a caller token, a cloud token, no header, and with
+  passthrough off.
 
 Uses `testify` `require`/`assert`.

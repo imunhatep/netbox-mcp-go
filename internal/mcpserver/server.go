@@ -31,6 +31,7 @@ func New(cfg *config.Config, svc *netboxx.Service) *server.MCPServer {
 	tools.RegisterIPAM(s, svc)
 	tools.RegisterVirtualization(s, svc)
 	tools.RegisterTenancy(s, svc)
+	tools.RegisterCore(s, svc)
 	return s
 }
 
@@ -46,16 +47,25 @@ func New(cfg *config.Config, svc *netboxx.Service) *server.MCPServer {
 func newMux(cfg *config.Config, svc *netboxx.Service) *http.ServeMux {
 	mcp := New(cfg, svc)
 
+	// With passthrough enabled, each transport lifts the request's bearer
+	// token into the handler context so NetBox is queried as the caller.
+	var httpOpts []server.StreamableHTTPOption
+	var sseOpts []server.SSEOption
+	if cfg.TokenPassthrough {
+		httpOpts = append(httpOpts, server.WithHTTPContextFunc(tokenPassthroughContext))
+		sseOpts = append(sseOpts, server.WithSSEContextFunc(tokenPassthroughContext))
+	}
+
 	mux := http.NewServeMux()
 	// Each transport is wrapped so the HTTP layer (client IP, method, path,
 	// headers/body, status/size/latency) is logged and tagged with which
 	// protocol served the request.
-	mux.Handle("/mcp", logHTTP("streamable-http", server.NewStreamableHTTPServer(mcp)))
+	mux.Handle("/mcp", logHTTP("streamable-http", server.NewStreamableHTTPServer(mcp, httpOpts...)))
 
 	// The SSE server routes both /sse and /message through its ServeHTTP,
 	// which also applies DNS-rebinding protection (the standalone SSEHandler
 	// and MessageHandler do not).
-	sse := server.NewSSEServer(mcp)
+	sse := server.NewSSEServer(mcp, sseOpts...)
 	mux.Handle("/sse", logHTTP("sse", sse))
 	mux.Handle("/message", logHTTP("sse", sse))
 
@@ -82,6 +92,7 @@ func Run(ctx context.Context, cfg *config.Config, svc *netboxx.Service) error {
 
 	log.Info().Str("listen", cfg.Listen).
 		Str("streamable_http", "/mcp").Str("sse", "/sse").Str("sse_message", "/message").
+		Bool("token_passthrough", cfg.TokenPassthrough).
 		Msg("[mcpserver] starting")
 	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err

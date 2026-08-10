@@ -10,18 +10,18 @@ import (
 )
 
 type DCIMBackend interface {
-	ListRegions(ctx context.Context, search, parent string, brief bool, page int) (*netboxx.Page, error)
+	ListRegions(ctx context.Context, f netboxx.RegionFilter, page int) (*netboxx.Page, error)
 	GetRegion(ctx context.Context, ref string) (netboxx.Object, error)
-	ListSiteGroups(ctx context.Context, search, parent string, brief bool, page int) (*netboxx.Page, error)
+	ListSiteGroups(ctx context.Context, f netboxx.SiteGroupFilter, page int) (*netboxx.Page, error)
 	GetSiteGroup(ctx context.Context, ref string) (netboxx.Object, error)
 	ListSites(ctx context.Context, f netboxx.SiteFilter, page int) (*netboxx.Page, error)
 	GetSite(ctx context.Context, ref string) (netboxx.Object, error)
-	ListLocations(ctx context.Context, search, site, parent string, brief bool, page int) (*netboxx.Page, error)
+	ListLocations(ctx context.Context, f netboxx.LocationFilter, page int) (*netboxx.Page, error)
 	GetLocation(ctx context.Context, ref string) (netboxx.Object, error)
-	ListRacks(ctx context.Context, search, site, location string, brief bool, page int) (*netboxx.Page, error)
+	ListRacks(ctx context.Context, f netboxx.RackFilter, page int) (*netboxx.Page, error)
 	ListDevices(ctx context.Context, f netboxx.DeviceFilter, page int) (*netboxx.Page, error)
 	GetDevice(ctx context.Context, ref string) (netboxx.Object, error)
-	ListDeviceInterfaces(ctx context.Context, device string, brief bool, page int) (*netboxx.Page, error)
+	ListDeviceInterfaces(ctx context.Context, f netboxx.DeviceInterfaceFilter, page int) (*netboxx.Page, error)
 }
 
 // briefDesc documents the shared optional "brief" argument on list tools.
@@ -46,8 +46,12 @@ func RegisterDCIM(s *server.MCPServer, b DCIMBackend) []string {
 		mcp.WithBoolean("brief", mcp.Description(briefDesc)),
 		mcp.WithNumber("page", mcp.Description("1-based page number")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		res, err := b.ListRegions(ctx, req.GetString("search", ""), req.GetString("parent", ""),
-			req.GetBool("brief", false), optPage(req))
+		f := netboxx.RegionFilter{
+			Search: req.GetString("search", ""),
+			Parent: req.GetString("parent", ""),
+			Brief:  req.GetBool("brief", false),
+		}
+		res, err := b.ListRegions(ctx, f, optPage(req))
 		if err != nil {
 			return errResult(err)
 		}
@@ -76,8 +80,12 @@ func RegisterDCIM(s *server.MCPServer, b DCIMBackend) []string {
 		mcp.WithBoolean("brief", mcp.Description(briefDesc)),
 		mcp.WithNumber("page", mcp.Description("1-based page number")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		res, err := b.ListSiteGroups(ctx, req.GetString("search", ""), req.GetString("parent", ""),
-			req.GetBool("brief", false), optPage(req))
+		f := netboxx.SiteGroupFilter{
+			Search: req.GetString("search", ""),
+			Parent: req.GetString("parent", ""),
+			Brief:  req.GetBool("brief", false),
+		}
+		res, err := b.ListSiteGroups(ctx, f, optPage(req))
 		if err != nil {
 			return errResult(err)
 		}
@@ -149,8 +157,13 @@ func RegisterDCIM(s *server.MCPServer, b DCIMBackend) []string {
 		mcp.WithBoolean("brief", mcp.Description(briefDesc)),
 		mcp.WithNumber("page", mcp.Description("1-based page number")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		res, err := b.ListLocations(ctx, req.GetString("search", ""), req.GetString("site", ""),
-			req.GetString("parent", ""), req.GetBool("brief", false), optPage(req))
+		f := netboxx.LocationFilter{
+			Search: req.GetString("search", ""),
+			Site:   req.GetString("site", ""),
+			Parent: req.GetString("parent", ""),
+			Brief:  req.GetBool("brief", false),
+		}
+		res, err := b.ListLocations(ctx, f, optPage(req))
 		if err != nil {
 			return errResult(err)
 		}
@@ -180,8 +193,13 @@ func RegisterDCIM(s *server.MCPServer, b DCIMBackend) []string {
 		mcp.WithBoolean("brief", mcp.Description(briefDesc)),
 		mcp.WithNumber("page", mcp.Description("1-based page number")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		res, err := b.ListRacks(ctx, req.GetString("search", ""), req.GetString("site", ""),
-			req.GetString("location", ""), req.GetBool("brief", false), optPage(req))
+		f := netboxx.RackFilter{
+			Search:   req.GetString("search", ""),
+			Site:     req.GetString("site", ""),
+			Location: req.GetString("location", ""),
+			Brief:    req.GetBool("brief", false),
+		}
+		res, err := b.ListRacks(ctx, f, optPage(req))
 		if err != nil {
 			return errResult(err)
 		}
@@ -246,7 +264,8 @@ func RegisterDCIM(s *server.MCPServer, b DCIMBackend) []string {
 		if err != nil {
 			return errResult(err)
 		}
-		res, err := b.ListDeviceInterfaces(ctx, device, req.GetBool("brief", false), optPage(req))
+		f := netboxx.DeviceInterfaceFilter{Device: device, Brief: req.GetBool("brief", false)}
+		res, err := b.ListDeviceInterfaces(ctx, f, optPage(req))
 		if err != nil {
 			return errResult(err)
 		}

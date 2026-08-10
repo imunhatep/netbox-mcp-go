@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
@@ -129,47 +130,66 @@ func TestOrganizationEndpoints(t *testing.T) {
 		wantQuery map[string]string
 	}{
 		{
-			name:      "list regions by parent slug",
-			call:      func() error { _, err := svc.ListRegions(context.Background(), "eu", "emea", false, 1); return err },
+			name: "list regions by parent slug",
+			call: func() error {
+				_, err := svc.ListRegions(context.Background(), RegionFilter{Search: "eu", Parent: "emea"}, 1)
+				return err
+			},
 			wantPath:  "/api/dcim/regions/",
 			wantQuery: map[string]string{"q": "eu", "parent": "emea"},
 		},
 		{
-			name:      "list site groups by numeric parent",
-			call:      func() error { _, err := svc.ListSiteGroups(context.Background(), "", "7", false, 1); return err },
+			name: "list site groups by numeric parent",
+			call: func() error {
+				_, err := svc.ListSiteGroups(context.Background(), SiteGroupFilter{Parent: "7"}, 1)
+				return err
+			},
 			wantPath:  "/api/dcim/site-groups/",
 			wantQuery: map[string]string{"parent_id": "7"},
 		},
 		{
 			name: "list locations by site and parent",
 			call: func() error {
-				_, err := svc.ListLocations(context.Background(), "", "ams-dc1", "floor2", true, 1)
+				_, err := svc.ListLocations(context.Background(),
+					LocationFilter{Site: "ams-dc1", Parent: "floor2", Brief: true}, 1)
 				return err
 			},
 			wantPath:  "/api/dcim/locations/",
 			wantQuery: map[string]string{"site": "ams-dc1", "parent": "floor2", "brief": "true"},
 		},
 		{
-			name:      "list racks by location",
-			call:      func() error { _, err := svc.ListRacks(context.Background(), "", "", "cage-4", false, 1); return err },
+			name: "list racks by location",
+			call: func() error {
+				_, err := svc.ListRacks(context.Background(), RackFilter{Location: "cage-4"}, 1)
+				return err
+			},
 			wantPath:  "/api/dcim/racks/",
 			wantQuery: map[string]string{"location": "cage-4"},
 		},
 		{
-			name:      "list tenant groups",
-			call:      func() error { _, err := svc.ListTenantGroups(context.Background(), "biz", "", false, 1); return err },
+			name: "list tenant groups",
+			call: func() error {
+				_, err := svc.ListTenantGroups(context.Background(), TenantGroupFilter{Search: "biz"}, 1)
+				return err
+			},
 			wantPath:  "/api/tenancy/tenant-groups/",
 			wantQuery: map[string]string{"q": "biz"},
 		},
 		{
-			name:      "list tenants by group",
-			call:      func() error { _, err := svc.ListTenants(context.Background(), "", "internal", false, 1); return err },
+			name: "list tenants by group",
+			call: func() error {
+				_, err := svc.ListTenants(context.Background(), TenantFilter{Group: "internal"}, 1)
+				return err
+			},
 			wantPath:  "/api/tenancy/tenants/",
 			wantQuery: map[string]string{"group": "internal"},
 		},
 		{
-			name:      "list contacts by group",
-			call:      func() error { _, err := svc.ListContacts(context.Background(), "noc", "4", false, 1); return err },
+			name: "list contacts by group",
+			call: func() error {
+				_, err := svc.ListContacts(context.Background(), ContactFilter{Search: "noc", Group: "4"}, 1)
+				return err
+			},
 			wantPath:  "/api/tenancy/contacts/",
 			wantQuery: map[string]string{"q": "noc", "group_id": "4"},
 		},
@@ -351,4 +371,154 @@ func TestSetRef(t *testing.T) {
 	assert.Empty(t, q.Get("rack"))
 	assert.False(t, q.Has("role"))
 	assert.False(t, q.Has("role_id"))
+}
+
+func TestListChangelog(t *testing.T) {
+	var gotPath, gotQuery string
+	svc := testService(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"count":1,"next":null,"results":[
+			{"id":77,"url":"http://x/api/core/object-changes/77/","time":"2026-08-01T09:15:00Z",
+			 "user":{"id":3,"username":"noc","url":"http://x/api/users/users/3/"},
+			 "action":{"value":"updated","label":"Updated"},
+			 "changed_object_type":"dcim.device","changed_object_id":42,
+			 "object_repr":"sw-core-01","request_id":"b1e2",
+			 "prechange_data":{"status":"active"},"postchange_data":{"status":"offline"}}]}`))
+	})
+
+	page, err := svc.ListChangelog(context.Background(), ChangelogFilter{
+		User:       "noc",
+		Action:     "updated",
+		ObjectType: "dcim.device",
+		ObjectID:   "42",
+		After:      "2026-08-01",
+	}, 1)
+	require.NoError(t, err)
+
+	assert.Equal(t, "/api/core/object-changes/", gotPath)
+	q, err := url.ParseQuery(gotQuery)
+	require.NoError(t, err)
+	assert.Equal(t, "noc", q.Get("user"))
+	assert.Equal(t, "updated", q.Get("action"))
+	assert.Equal(t, "dcim.device", q.Get("changed_object_type"))
+	assert.Equal(t, "42", q.Get("changed_object_id"))
+	assert.Equal(t, "2026-08-01", q.Get("time_after"))
+	assert.False(t, q.Has("time_before"))
+
+	require.Len(t, page.Results, 1)
+	change := page.Results[0]
+	// The before/after snapshots are what make the audit trail useful, so they
+	// must survive pruning; only hyperlinks are stripped.
+	assert.Equal(t, map[string]any{"status": "active"}, change["prechange_data"])
+	assert.Equal(t, map[string]any{"status": "offline"}, change["postchange_data"])
+	assert.NotContains(t, change, "url")
+	assert.NotContains(t, change["user"], "url")
+}
+
+// A numeric user ref must become user_id, matching NetBox's filterset.
+func TestListChangelogUserID(t *testing.T) {
+	svc := testService(t, func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "3", r.URL.Query().Get("user_id"))
+		assert.False(t, r.URL.Query().Has("user"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"count":0,"next":null,"results":[]}`))
+	})
+	_, err := svc.ListChangelog(context.Background(), ChangelogFilter{User: "3"}, 1)
+	require.NoError(t, err)
+}
+
+// The ObjectChange model lives in core on NetBox 4+ and in extras before that,
+// so a 404 on the modern path falls back to the legacy one.
+func TestListChangelogLegacyPath(t *testing.T) {
+	var paths []string
+	svc := testService(t, func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/core/object-changes/" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"Not found."}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"count":1,"next":null,"results":[{"id":5,"object_repr":"old"}]}`))
+	})
+
+	page, err := svc.ListChangelog(context.Background(), ChangelogFilter{}, 1)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/api/core/object-changes/", "/api/extras/object-changes/"}, paths)
+	require.Len(t, page.Results, 1)
+	assert.Equal(t, "old", page.Results[0]["object_repr"])
+}
+
+// A non-404 failure is returned as-is rather than retried on the legacy path.
+func TestListChangelogNoFallbackOnForbidden(t *testing.T) {
+	var calls int
+	svc := testService(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"detail":"no perms"}`))
+	})
+
+	_, err := svc.ListChangelog(context.Background(), ChangelogFilter{}, 1)
+	require.ErrorIs(t, err, ErrForbidden)
+	assert.Equal(t, 1, calls)
+}
+
+// A token on the context authenticates the request instead of the configured
+// one, and the scheme follows the token's shape.
+func TestContextTokenOverridesConfigured(t *testing.T) {
+	var gotAuth string
+	svc := testService(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"count":0,"next":null,"results":[]}`))
+	})
+
+	_, err := svc.ListSites(WithToken(context.Background(), "caller"), SiteFilter{}, 1)
+	require.NoError(t, err)
+	assert.Equal(t, "Token caller", gotAuth)
+
+	_, err = svc.ListSites(WithToken(context.Background(), "nbt_cloud"), SiteFilter{}, 1)
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer nbt_cloud", gotAuth)
+
+	// An empty token is ignored rather than overriding with nothing.
+	_, err = svc.ListSites(WithToken(context.Background(), ""), SiteFilter{}, 1)
+	require.NoError(t, err)
+	assert.Equal(t, "Token tok", gotAuth)
+}
+
+// Search fans out over goroutines; every one of them must carry the caller's
+// token, not the configured fallback.
+func TestContextTokenReachesSearchFanout(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string]int{}
+	svc := testService(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen[r.Header.Get("Authorization")]++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"count":0,"next":null,"results":[]}`))
+	})
+
+	_, err := svc.Search(WithToken(context.Background(), "caller"), "x", 5)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]int{"Token caller": len(searchTargets)}, seen)
+}
+
+// With neither a context token nor a configured one, the request is refused
+// before it reaches NetBox.
+func TestNoTokenRefusesRequest(t *testing.T) {
+	var calls int
+	svc := testService(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusOK)
+	})
+	svc.token = ""
+
+	_, err := svc.ListSites(context.Background(), SiteFilter{}, 1)
+	require.ErrorIs(t, err, ErrUnauthorized)
+	assert.Zero(t, calls)
 }
