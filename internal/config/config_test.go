@@ -41,3 +41,12 @@ func TestValidatePageSize(t *testing.T) {
 	c.PageSize = 0
 	assert.ErrorContains(t, c.Validate(), "page-size")
 }
+
+// With passthrough the token arrives per request, so a configured one is
+// optional rather than required.
+func TestValidateMissingTokenWithPassthrough(t *testing.T) {
+	c := valid()
+	c.NetBoxToken = ""
+	c.TokenPassthrough = true
+	assert.NoError(t, c.Validate())
+}

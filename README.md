@@ -4,7 +4,8 @@ MCP (Model Context Protocol) server exposing a NetBox instance to Claude Code
 and other MCP clients. Read-only: it lists and fetches the organization
 hierarchy (regions, site groups, sites, locations, tenant groups, tenants,
 contacts), racks, devices, interfaces, prefixes (subnets), IP addresses, VLANs,
-VRFs, clusters and virtual machines — it never writes to NetBox.
+VRFs, clusters and virtual machines, plus the changelog (audit trail) — it never
+writes to NetBox.
 
 Objects are passed through exactly as NetBox returns them — including
 `custom_fields`, `tags` and `comments` — so nothing is lost and any NetBox
@@ -17,7 +18,8 @@ when full objects would be too verbose.
 | Env var | Flag | Default | Description |
 |---|---|---|---|
 | `NETBOX_URL` | `--netbox-url` | — (required) | Base URL of the NetBox instance |
-| `NETBOX_TOKEN` | `--netbox-token` | — (required) | NetBox API token |
+| `NETBOX_TOKEN` | `--netbox-token` | — (required) | NetBox API token; optional with token passthrough, where it is the fallback |
+| `NETBOX_TOKEN_PASSTHROUGH` | `--token-passthrough` | `false` | Authenticate to NetBox with each request's own token (see below) |
 | `NETBOX_MCP_LISTEN` | `--listen` | `127.0.0.1:3031` | HTTP listen address |
 | `NETBOX_MCP_REQUEST_TIMEOUT` | `--request-timeout` | `30s` | Per-request timeout to NetBox |
 | `NETBOX_MCP_PAGE_SIZE` | `--page-size` | `50` | Objects per page returned by list tools |
@@ -35,6 +37,34 @@ Endpoints:
 - `POST /mcp` — Streamable HTTP (current MCP spec)
 - `GET /sse` + `POST /message` — legacy HTTP+SSE transport
 - `GET /healthz` — liveness probe
+
+### Token passthrough
+
+By default every request is served with the single configured `NETBOX_TOKEN`, so
+all callers share one service account's view of NetBox. With
+`NETBOX_TOKEN_PASSTHROUGH=true` each MCP request instead authenticates with the
+token from its own `Authorization: Bearer <token>` header, so callers see
+exactly what their own NetBox permissions allow — the right default for a shared
+or multi-tenant deployment.
+
+```sh
+NETBOX_URL=https://netbox.internal NETBOX_TOKEN_PASSTHROUGH=true ./bin/netbox-mcp serve
+```
+
+Details:
+
+- The token is scoped to one HTTP request; it is never stored on the shared
+  client. Tokens are redacted from trace logs.
+- A token starting with `nbt_` (NetBox Labs Cloud) is sent to NetBox with the
+  `Bearer` scheme, anything else with NetBox's `Token` scheme.
+- Only the `Bearer` scheme is read from the incoming header; other schemes are
+  ignored rather than treated as credentials.
+- Requests without a bearer token fall back to `NETBOX_TOKEN`. If that is also
+  unset, the tool call fails with an `unauthorized` message instead of querying
+  NetBox anonymously — so leaving `NETBOX_TOKEN` unset makes authentication
+  mandatory.
+- Serve over TLS (or bind to loopback behind a proxy that terminates it) since
+  callers now send their own credentials.
 
 ### Container
 
@@ -132,6 +162,12 @@ node's direct children, and omitting it returns the flat list.
 | `get_tenant` | One tenant by id or slug |
 | `list_contacts` | List contacts (people/teams assignable to objects); `search`, `group` |
 | `netbox_status` | NetBox version and installed plugins |
+
+### Changelog
+
+| Tool | Description |
+|---|---|
+| `list_changelog` | Audit trail of created/updated/deleted objects, newest first, with `prechange_data`/`postchange_data` snapshots; `search`, `user`, `action`, `object_type` (app.model, e.g. `dcim.device`), `object_id`, `request_id`, `after`, `before` |
 
 ## Development
 

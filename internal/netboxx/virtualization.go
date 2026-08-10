@@ -5,12 +5,19 @@ import (
 	"net/url"
 )
 
-// ListClusters lists virtualization clusters.
-func (s *Service) ListClusters(ctx context.Context, search, site string, brief bool, page int) (*Page, error) {
+// ClusterFilter narrows ListClusters. Site accepts a numeric id or slug.
+type ClusterFilter struct {
+	Search string
+	Site   string
+	Brief  bool
+}
+
+// ListClusters lists virtualization clusters matching the filter.
+func (s *Service) ListClusters(ctx context.Context, f ClusterFilter, page int) (*Page, error) {
 	q := url.Values{}
-	setStr(q, "q", search)
-	setRef(q, "site", site)
-	setBrief(q, brief)
+	setStr(q, "q", f.Search)
+	setRef(q, "site", f.Site)
+	setBrief(q, f.Brief)
 	return list(ctx, s, "virtualization/clusters", page, q)
 }
 
@@ -43,10 +50,17 @@ func (s *Service) GetVirtualMachine(ctx context.Context, ref string) (Object, er
 	return getOne(ctx, s, "virtualization/virtual-machines", ref, "name")
 }
 
-// ListVMInterfaces lists the interfaces of a VM (id or exact name).
-func (s *Service) ListVMInterfaces(ctx context.Context, vm string, brief bool, page int) (*Page, error) {
+// VMInterfaceFilter narrows ListVMInterfaces. VM is required and accepts a
+// numeric id or exact name.
+type VMInterfaceFilter struct {
+	VM    string
+	Brief bool
+}
+
+// ListVMInterfaces lists the interfaces of one virtual machine.
+func (s *Service) ListVMInterfaces(ctx context.Context, f VMInterfaceFilter, page int) (*Page, error) {
 	q := url.Values{}
-	setRef(q, "virtual_machine", vm)
-	setBrief(q, brief)
+	setRef(q, "virtual_machine", f.VM)
+	setBrief(q, f.Brief)
 	return list(ctx, s, "virtualization/interfaces", page, q)
 }

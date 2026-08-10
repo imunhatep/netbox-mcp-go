@@ -5,22 +5,37 @@ import (
 	"net/url"
 )
 
-// ListTenantGroups lists tenant groups. They nest, so parent narrows the
-// listing to the direct children of one group (numeric id or slug).
-func (s *Service) ListTenantGroups(ctx context.Context, search, parent string, brief bool, page int) (*Page, error) {
+// TenantGroupFilter narrows ListTenantGroups. Parent accepts a numeric id or
+// slug.
+type TenantGroupFilter struct {
+	Search string
+	Parent string
+	Brief  bool
+}
+
+// ListTenantGroups lists tenant groups. They nest, so Parent narrows the
+// listing to the direct children of one group.
+func (s *Service) ListTenantGroups(ctx context.Context, f TenantGroupFilter, page int) (*Page, error) {
 	q := url.Values{}
-	setStr(q, "q", search)
-	setRef(q, "parent", parent)
-	setBrief(q, brief)
+	setStr(q, "q", f.Search)
+	setRef(q, "parent", f.Parent)
+	setBrief(q, f.Brief)
 	return list(ctx, s, "tenancy/tenant-groups", page, q)
 }
 
-// ListTenants lists tenants, optionally filtered by search text and group.
-func (s *Service) ListTenants(ctx context.Context, search, group string, brief bool, page int) (*Page, error) {
+// TenantFilter narrows ListTenants. Group accepts a numeric id or slug.
+type TenantFilter struct {
+	Search string
+	Group  string
+	Brief  bool
+}
+
+// ListTenants lists tenants matching the filter.
+func (s *Service) ListTenants(ctx context.Context, f TenantFilter, page int) (*Page, error) {
 	q := url.Values{}
-	setStr(q, "q", search)
-	setRef(q, "group", group)
-	setBrief(q, brief)
+	setStr(q, "q", f.Search)
+	setRef(q, "group", f.Group)
+	setBrief(q, f.Brief)
 	return list(ctx, s, "tenancy/tenants", page, q)
 }
 
@@ -29,13 +44,20 @@ func (s *Service) GetTenant(ctx context.Context, ref string) (Object, error) {
 	return getOne(ctx, s, "tenancy/tenants", ref, "slug")
 }
 
+// ContactFilter narrows ListContacts. Group accepts a numeric id or slug.
+type ContactFilter struct {
+	Search string
+	Group  string
+	Brief  bool
+}
+
 // ListContacts lists contacts — the people or teams attached to organizational
-// objects. Group accepts a numeric id or slug.
-func (s *Service) ListContacts(ctx context.Context, search, group string, brief bool, page int) (*Page, error) {
+// objects.
+func (s *Service) ListContacts(ctx context.Context, f ContactFilter, page int) (*Page, error) {
 	q := url.Values{}
-	setStr(q, "q", search)
-	setRef(q, "group", group)
-	setBrief(q, brief)
+	setStr(q, "q", f.Search)
+	setRef(q, "group", f.Group)
+	setBrief(q, f.Brief)
 	return list(ctx, s, "tenancy/contacts", page, q)
 }
 

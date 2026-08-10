@@ -5,13 +5,20 @@ import (
 	"net/url"
 )
 
-// ListRegions lists regions. Regions nest, so parent narrows the listing to the
-// direct children of one region (numeric id or slug).
-func (s *Service) ListRegions(ctx context.Context, search, parent string, brief bool, page int) (*Page, error) {
+// RegionFilter narrows ListRegions. Parent accepts a numeric id or slug.
+type RegionFilter struct {
+	Search string
+	Parent string
+	Brief  bool
+}
+
+// ListRegions lists regions. Regions nest, so Parent narrows the listing to the
+// direct children of one region.
+func (s *Service) ListRegions(ctx context.Context, f RegionFilter, page int) (*Page, error) {
 	q := url.Values{}
-	setStr(q, "q", search)
-	setRef(q, "parent", parent)
-	setBrief(q, brief)
+	setStr(q, "q", f.Search)
+	setRef(q, "parent", f.Parent)
+	setBrief(q, f.Brief)
 	return list(ctx, s, "dcim/regions", page, q)
 }
 
@@ -20,13 +27,20 @@ func (s *Service) GetRegion(ctx context.Context, ref string) (Object, error) {
 	return getOne(ctx, s, "dcim/regions", ref, "slug")
 }
 
+// SiteGroupFilter narrows ListSiteGroups. Parent accepts a numeric id or slug.
+type SiteGroupFilter struct {
+	Search string
+	Parent string
+	Brief  bool
+}
+
 // ListSiteGroups lists site groups — the functional (non-geographic) grouping
-// of sites. They nest, so parent narrows to one group's direct children.
-func (s *Service) ListSiteGroups(ctx context.Context, search, parent string, brief bool, page int) (*Page, error) {
+// of sites. They nest, so Parent narrows to one group's direct children.
+func (s *Service) ListSiteGroups(ctx context.Context, f SiteGroupFilter, page int) (*Page, error) {
 	q := url.Values{}
-	setStr(q, "q", search)
-	setRef(q, "parent", parent)
-	setBrief(q, brief)
+	setStr(q, "q", f.Search)
+	setRef(q, "parent", f.Parent)
+	setBrief(q, f.Brief)
 	return list(ctx, s, "dcim/site-groups", page, q)
 }
 
@@ -64,14 +78,22 @@ func (s *Service) GetSite(ctx context.Context, ref string) (Object, error) {
 	return getOne(ctx, s, "dcim/sites", ref, "slug")
 }
 
+// LocationFilter narrows ListLocations. Site/Parent accept a numeric id or slug.
+type LocationFilter struct {
+	Search string
+	Site   string
+	Parent string
+	Brief  bool
+}
+
 // ListLocations lists locations (floors, rooms, cages) within sites. Locations
-// nest, so parent narrows to one location's direct children.
-func (s *Service) ListLocations(ctx context.Context, search, site, parent string, brief bool, page int) (*Page, error) {
+// nest, so Parent narrows to one location's direct children.
+func (s *Service) ListLocations(ctx context.Context, f LocationFilter, page int) (*Page, error) {
 	q := url.Values{}
-	setStr(q, "q", search)
-	setRef(q, "site", site)
-	setRef(q, "parent", parent)
-	setBrief(q, brief)
+	setStr(q, "q", f.Search)
+	setRef(q, "site", f.Site)
+	setRef(q, "parent", f.Parent)
+	setBrief(q, f.Brief)
 	return list(ctx, s, "dcim/locations", page, q)
 }
 
@@ -80,13 +102,21 @@ func (s *Service) GetLocation(ctx context.Context, ref string) (Object, error) {
 	return getOne(ctx, s, "dcim/locations", ref, "slug")
 }
 
-// ListRacks lists racks, optionally filtered by search text, site and location.
-func (s *Service) ListRacks(ctx context.Context, search, site, location string, brief bool, page int) (*Page, error) {
+// RackFilter narrows ListRacks. Site/Location accept a numeric id or slug.
+type RackFilter struct {
+	Search   string
+	Site     string
+	Location string
+	Brief    bool
+}
+
+// ListRacks lists racks matching the filter.
+func (s *Service) ListRacks(ctx context.Context, f RackFilter, page int) (*Page, error) {
 	q := url.Values{}
-	setStr(q, "q", search)
-	setRef(q, "site", site)
-	setRef(q, "location", location)
-	setBrief(q, brief)
+	setStr(q, "q", f.Search)
+	setRef(q, "site", f.Site)
+	setRef(q, "location", f.Location)
+	setBrief(q, f.Brief)
 	return list(ctx, s, "dcim/racks", page, q)
 }
 
@@ -126,10 +156,17 @@ func (s *Service) GetDevice(ctx context.Context, ref string) (Object, error) {
 	return getOne(ctx, s, "dcim/devices", ref, "name")
 }
 
-// ListDeviceInterfaces lists the interfaces of a device (id or exact name).
-func (s *Service) ListDeviceInterfaces(ctx context.Context, device string, brief bool, page int) (*Page, error) {
+// DeviceInterfaceFilter narrows ListDeviceInterfaces. Device is required and
+// accepts a numeric id or exact name.
+type DeviceInterfaceFilter struct {
+	Device string
+	Brief  bool
+}
+
+// ListDeviceInterfaces lists the interfaces of one device.
+func (s *Service) ListDeviceInterfaces(ctx context.Context, f DeviceInterfaceFilter, page int) (*Page, error) {
 	q := url.Values{}
-	setRef(q, "device", device)
-	setBrief(q, brief)
+	setRef(q, "device", f.Device)
+	setBrief(q, f.Brief)
 	return list(ctx, s, "dcim/interfaces", page, q)
 }

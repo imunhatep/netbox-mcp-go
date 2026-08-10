@@ -70,20 +70,34 @@ func (s *Service) GetIPAddress(ctx context.Context, ref string) (Object, error) 
 	return getOne(ctx, s, "ipam/ip-addresses", ref, "address")
 }
 
-// ListVLANs lists VLANs, optionally filtered by search text, site and 802.1Q id.
-func (s *Service) ListVLANs(ctx context.Context, search, site, vid string, brief bool, page int) (*Page, error) {
+// VLANFilter narrows ListVLANs. Site accepts a numeric id or slug.
+type VLANFilter struct {
+	Search string
+	Site   string
+	VID    string // 802.1Q id, e.g. "100"
+	Brief  bool
+}
+
+// ListVLANs lists VLANs matching the filter.
+func (s *Service) ListVLANs(ctx context.Context, f VLANFilter, page int) (*Page, error) {
 	q := url.Values{}
-	setStr(q, "q", search)
-	setRef(q, "site", site)
-	setStr(q, "vid", vid)
-	setBrief(q, brief)
+	setStr(q, "q", f.Search)
+	setRef(q, "site", f.Site)
+	setStr(q, "vid", f.VID)
+	setBrief(q, f.Brief)
 	return list(ctx, s, "ipam/vlans", page, q)
 }
 
-// ListVRFs lists VRFs, optionally filtered by search text.
-func (s *Service) ListVRFs(ctx context.Context, search string, brief bool, page int) (*Page, error) {
+// VRFFilter narrows ListVRFs.
+type VRFFilter struct {
+	Search string
+	Brief  bool
+}
+
+// ListVRFs lists VRFs matching the filter.
+func (s *Service) ListVRFs(ctx context.Context, f VRFFilter, page int) (*Page, error) {
 	q := url.Values{}
-	setStr(q, "q", search)
-	setBrief(q, brief)
+	setStr(q, "q", f.Search)
+	setBrief(q, f.Brief)
 	return list(ctx, s, "ipam/vrfs", page, q)
 }

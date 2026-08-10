@@ -28,10 +28,16 @@ func (c ServeCommand) Command() *cli.Command {
 				Required: true,
 			},
 			&cli.StringFlag{
-				Name:     "netbox-token",
-				Usage:    "NetBox API token",
-				Sources:  cli.EnvVars("NETBOX_TOKEN"),
-				Required: true,
+				Name: "netbox-token",
+				Usage: "NetBox API token; required unless --token-passthrough is set, " +
+					"in which case it is the fallback for requests without one",
+				Sources: cli.EnvVars("NETBOX_TOKEN"),
+			},
+			&cli.BoolFlag{
+				Name: "token-passthrough",
+				Usage: "authenticate to NetBox with the token from each request's " +
+					"Authorization: Bearer header, so callers use their own NetBox permissions",
+				Sources: cli.EnvVars("NETBOX_TOKEN_PASSTHROUGH"),
 			},
 			&cli.StringFlag{
 				Name:    "listen",

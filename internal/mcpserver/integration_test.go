@@ -83,6 +83,7 @@ func TestToolsListOverHTTP(t *testing.T) {
 		"list_vlans", "list_vrfs",
 		"list_clusters", "list_virtual_machines", "get_virtual_machine", "list_vm_interfaces",
 		"list_tenant_groups", "list_tenants", "get_tenant", "list_contacts", "netbox_status",
+		"list_changelog",
 	} {
 		assert.Contains(t, out, `"`+tool+`"`)
 	}
