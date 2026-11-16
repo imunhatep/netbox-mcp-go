@@ -132,12 +132,17 @@ type DeviceFilter struct {
 	Tenant   string
 	Status   string
 	Tag      string
+	IDs      []string // exact numeric ids, OR-ed: one call instead of a get per device
+	Names    []string // exact names (case-insensitive), OR-ed
+	Fields   []string // top-level fields to return; overrides Brief
 	Brief    bool
 }
 
 // ListDevices lists devices matching the filter.
 func (s *Service) ListDevices(ctx context.Context, f DeviceFilter, page int) (*Page, error) {
 	q := url.Values{}
+	setMulti(q, "id", f.IDs)
+	setMulti(q, "name", f.Names)
 	setStr(q, "q", f.Search)
 	setRef(q, "region", f.Region)
 	setRef(q, "site", f.Site)
@@ -148,6 +153,9 @@ func (s *Service) ListDevices(ctx context.Context, f DeviceFilter, page int) (*P
 	setStr(q, "status", f.Status)
 	setStr(q, "tag", f.Tag)
 	setBrief(q, f.Brief)
+	if err := setFields(q, f.Fields); err != nil {
+		return nil, err
+	}
 	return list(ctx, s, "dcim/devices", page, q)
 }
 

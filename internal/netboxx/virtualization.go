@@ -5,10 +5,17 @@ import (
 	"net/url"
 )
 
-// ClusterFilter narrows ListClusters. Site accepts a numeric id or slug.
+// ClusterFilter narrows ListClusters. Reference fields accept a numeric id or
+// slug.
 type ClusterFilter struct {
 	Search string
 	Site   string
+	Type   string // cluster type id or slug
+	Group  string // cluster group id or slug
+	Tenant string
+	Status string
+	Tag    string
+	Fields []string // top-level fields to return; overrides Brief
 	Brief  bool
 }
 
@@ -17,7 +24,15 @@ func (s *Service) ListClusters(ctx context.Context, f ClusterFilter, page int) (
 	q := url.Values{}
 	setStr(q, "q", f.Search)
 	setRef(q, "site", f.Site)
+	setRef(q, "type", f.Type)
+	setRef(q, "group", f.Group)
+	setRef(q, "tenant", f.Tenant)
+	setStr(q, "status", f.Status)
+	setStr(q, "tag", f.Tag)
 	setBrief(q, f.Brief)
+	if err := setFields(q, f.Fields); err != nil {
+		return nil, err
+	}
 	return list(ctx, s, "virtualization/clusters", page, q)
 }
 
@@ -29,12 +44,17 @@ type VMFilter struct {
 	Status  string
 	Tenant  string
 	Tag     string
+	IDs     []string // exact numeric ids, OR-ed: one call instead of a get per VM
+	Names   []string // exact names, OR-ed
+	Fields  []string // top-level fields to return; overrides Brief
 	Brief   bool
 }
 
 // ListVirtualMachines lists VMs matching the filter.
 func (s *Service) ListVirtualMachines(ctx context.Context, f VMFilter, page int) (*Page, error) {
 	q := url.Values{}
+	setMulti(q, "id", f.IDs)
+	setMulti(q, "name", f.Names)
 	setStr(q, "q", f.Search)
 	setRef(q, "cluster", f.Cluster)
 	setRef(q, "site", f.Site)
@@ -42,6 +62,9 @@ func (s *Service) ListVirtualMachines(ctx context.Context, f VMFilter, page int)
 	setRef(q, "tenant", f.Tenant)
 	setStr(q, "tag", f.Tag)
 	setBrief(q, f.Brief)
+	if err := setFields(q, f.Fields); err != nil {
+		return nil, err
+	}
 	return list(ctx, s, "virtualization/virtual-machines", page, q)
 }
 

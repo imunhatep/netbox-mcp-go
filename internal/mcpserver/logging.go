@@ -48,10 +48,23 @@ func (l *mcpLogger) onBefore(_ context.Context, id any, method mcp.MCPMethod, me
 }
 
 func (l *mcpLogger) onSuccess(_ context.Context, id any, method mcp.MCPMethod, message, result any) {
-	ev := log.Info().Str("mcp_method", string(method)).Interface("id", id).
+	ev := log.Info()
+	// Tool failures come back as results, not errors, so flag them here or
+	// they are indistinguishable from successes in the log.
+	res, isTool := result.(*mcp.CallToolResult)
+	if isTool && res.IsError {
+		ev = log.Warn()
+	}
+	ev = ev.Str("mcp_method", string(method)).Interface("id", id).
 		Dur("elapsed", l.elapsed(id)).Int("resp_bytes", contentSize(result))
 	if req, ok := message.(*mcp.CallToolRequest); ok {
-		ev.Str("tool", req.Params.Name)
+		ev.Str("tool", req.Params.Name).Str("args", argsPreview(req.Params.Arguments))
+	}
+	if isTool {
+		ev.Bool("is_error", res.IsError)
+		if res.IsError {
+			ev.Str("tool_error", toolErrorText(res))
+		}
 	}
 	ev.Msg("[mcp] response")
 
@@ -82,6 +95,42 @@ func (l *mcpLogger) elapsed(id any) time.Duration {
 // log; the full body is always restored for the handler.
 const maxBodyLog = 4096
 
+// maxArgsLog caps the tool arguments and tool error text logged at info:
+// enough to see what was asked (filters, names, addresses) without letting a
+// 100-address batch flood the log.
+const maxArgsLog = 512
+
+// argsPreview renders tool arguments as compact JSON, capped at maxArgsLog.
+// Arguments are NetBox filters, never credentials: tokens travel in headers,
+// which are redacted separately.
+func argsPreview(args any) string {
+	if args == nil {
+		return "{}"
+	}
+	b, err := json.Marshal(args)
+	if err != nil {
+		return ""
+	}
+	return truncate(string(b), maxArgsLog)
+}
+
+// toolErrorText returns the message of a failed tool result, capped.
+func toolErrorText(r *mcp.CallToolResult) string {
+	for _, c := range r.Content {
+		if tc, ok := mcp.AsTextContent(c); ok {
+			return truncate(tc.Text, maxArgsLog)
+		}
+	}
+	return ""
+}
+
+func truncate(s string, n int) string {
+	if len(s) > n {
+		return s[:n] + "...(truncated)"
+	}
+	return s
+}
+
 // logHTTP wraps an MCP transport handler to log the HTTP request and response,
 // tagged with the transport ("streamable-http" or "sse") that served it.
 // Verbosity is split like the rest of the logging:
@@ -106,14 +155,68 @@ func logHTTP(transport string, next http.Handler) http.Handler {
 				Str("body", previewBody(r)).Msg("[mcp] http request detail")
 		}
 
+		rpc := rpcMethod(r)
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
 
-		log.Info().Str("transport", transport).Str("http_method", r.Method).
+		// A POST without a method is the client answering a server request —
+		// mostly the heartbeat pings, one per open stream every 30s — so it is
+		// only interesting at debug.
+		ev := log.Info()
+		if r.Method == http.MethodPost && rpc == "" && rec.status < 300 {
+			ev = log.Debug()
+		}
+		ev.Str("transport", transport).Str("http_method", r.Method).
 			Str("path", r.URL.Path).Str("remote", clientIP(r)).
+			Str("session", shortSession(r)).Str("rpc_method", rpc).
 			Int("status", rec.status).Int("resp_bytes", rec.bytes).
 			Dur("elapsed", time.Since(start)).Msg("[mcp] http response")
 	})
+}
+
+// shortSession identifies the MCP session of a request in logs without
+// printing the full id: the first 8 hex digits of its UUID, or "none".
+func shortSession(r *http.Request) string {
+	id := r.Header.Get("Mcp-Session-Id")
+	if id == "" {
+		id = r.URL.Query().Get("sessionId") // legacy SSE /message
+	}
+	if id == "" {
+		return "none"
+	}
+	id = strings.TrimPrefix(id, "mcp-session-")
+	if len(id) > 8 {
+		id = id[:8]
+	}
+	return id
+}
+
+// maxRPCPeek caps how much of a POST body is read to find its JSON-RPC
+// method; MCP requests are small and the body is restored in full.
+const maxRPCPeek = 1 << 20
+
+// rpcMethod returns the JSON-RPC method of a POST body ("batch" for an array,
+// "" for a response or anything unparsable), restoring the body for the
+// handler.
+func rpcMethod(r *http.Request) string {
+	if r.Method != http.MethodPost || r.Body == nil {
+		return ""
+	}
+	data, err := io.ReadAll(io.LimitReader(r.Body, maxRPCPeek))
+	r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(data), r.Body))
+	if err != nil {
+		return ""
+	}
+	if trimmed := bytes.TrimSpace(data); len(trimmed) > 0 && trimmed[0] == '[' {
+		return "batch"
+	}
+	var msg struct {
+		Method string `json:"method"`
+	}
+	if json.Unmarshal(data, &msg) != nil {
+		return ""
+	}
+	return msg.Method
 }
 
 // statusRecorder captures the status code and response size while preserving
@@ -174,10 +277,7 @@ func previewBody(r *http.Request) string {
 		return ""
 	}
 	r.Body = io.NopCloser(bytes.NewReader(data))
-	if len(data) > maxBodyLog {
-		return string(data[:maxBodyLog]) + "...(truncated)"
-	}
-	return string(data)
+	return truncate(string(data), maxBodyLog)
 }
 
 // redactHTTPHeaders copies h with credential-bearing headers masked so trace

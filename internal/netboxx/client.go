@@ -193,3 +193,37 @@ func setBrief(q url.Values, brief bool) {
 		q.Set("brief", "true")
 	}
 }
+
+// setMulti adds a repeated filter (id=1&id=2) for NetBox's multi-value
+// filters, which OR the values together. Blank values are skipped.
+func setMulti(q url.Values, param string, vals []string) {
+	for _, v := range vals {
+		if v = strings.TrimSpace(v); v != "" {
+			q.Add(param, v)
+		}
+	}
+}
+
+// setFields restricts a list response to the named top-level fields via
+// NetBox's ?fields= parameter (NetBox 4.0+), which takes precedence over
+// brief. id is always included. NetBox matches top-level names only and
+// silently ignores anything else, so a nested path such as "site.name" is
+// rejected here rather than quietly returning nothing.
+func setFields(q url.Values, fields []string) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	out := []string{"id"}
+	for _, f := range fields {
+		f = strings.TrimSpace(f)
+		if strings.ContainsAny(f, ". ") {
+			return fmt.Errorf("%w: field %q: only top-level field names are supported, e.g. site or primary_ip4", ErrValidation, f)
+		}
+		if f != "" && f != "id" {
+			out = append(out, f)
+		}
+	}
+	q.Set("fields", strings.Join(out, ","))
+	q.Del("brief")
+	return nil
+}

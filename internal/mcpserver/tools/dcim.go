@@ -207,7 +207,12 @@ func RegisterDCIM(s *server.MCPServer, b DCIMBackend) []string {
 	})
 
 	add(mcp.NewTool("list_devices",
-		mcp.WithDescription("List devices, filterable by region, site, location, rack, role, tenant, status and tag."),
+		mcp.WithDescription("List devices, filterable by region, site, location, rack, role, tenant, status and tag. "+
+			"To fetch several known devices, pass names=[...] or ids=[...] in ONE call instead of calling get_device per device. "+
+			"Use fields=[...] to get just the attributes you need for many devices; use brief only to discover names."),
+		mcp.WithArray("names", mcp.WithStringItems(), mcp.Description("exact device names (case-insensitive) to fetch together, e.g. [\"sw-core-01\",\"sw-core-02\"]")),
+		mcp.WithArray("ids", mcp.WithStringItems(), mcp.Description("numeric device ids to fetch together")),
+		mcp.WithArray("fields", mcp.WithStringItems(), mcp.Description(fieldsDesc)),
 		mcp.WithString("search", mcp.Description("free-text filter (name, serial, asset tag)")),
 		mcp.WithString("region", mcp.Description("filter by region id or slug")),
 		mcp.WithString("site", mcp.Description("filter by site id or slug")),
@@ -230,6 +235,9 @@ func RegisterDCIM(s *server.MCPServer, b DCIMBackend) []string {
 			Tenant:   req.GetString("tenant", ""),
 			Status:   req.GetString("status", ""),
 			Tag:      req.GetString("tag", ""),
+			IDs:      optList(req, "ids"),
+			Names:    optList(req, "names"),
+			Fields:   optList(req, "fields"),
 			Brief:    req.GetBool("brief", false),
 		}
 		res, err := b.ListDevices(ctx, f, optPage(req))
@@ -240,7 +248,8 @@ func RegisterDCIM(s *server.MCPServer, b DCIMBackend) []string {
 	})
 
 	add(mcp.NewTool("get_device",
-		mcp.WithDescription("Get one device by numeric id or exact name, with all fields including custom_fields, tags and comments."),
+		mcp.WithDescription("Get one device by numeric id or exact name, with all fields including custom_fields, tags and comments. "+
+			"For more than one device call list_devices once with names=[...] or ids=[...]; do not call get_device in a loop."),
 		mcp.WithString("device", mcp.Required(), mcp.Description("device id or exact name, e.g. 42 or sw-core-01")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		ref, err := req.RequireString("device")

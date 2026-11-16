@@ -24,6 +24,7 @@ when full objects would be too verbose.
 | `NETBOX_MCP_REQUEST_TIMEOUT` | `--request-timeout` | `30s` | Per-request timeout to NetBox |
 | `NETBOX_MCP_PAGE_SIZE` | `--page-size` | `50` | Objects per page returned by list tools |
 | `NETBOX_MCP_VERBOSE` | `--verbose` / `-v` | `3` | Log level: 0=fatal … 5=trace |
+| `NETBOX_MCP_LOG_FORMAT` | `--log-format` | `console` | `console` (human-readable) or `json` (one object per line, for log collectors and `jq`) |
 
 ## Run
 
@@ -94,19 +95,51 @@ podman run --rm -p 3031:3031 \
 claude mcp add --transport http netbox http://127.0.0.1:3031/mcp
 ```
 
+### Agent skill
+
+The binary embeds a Claude Code skill, `using-netbox-mcp`
+([skills/using-netbox-mcp/SKILL.md](skills/using-netbox-mcp/SKILL.md)), that
+teaches the model which tool to pick, how to batch lookups and how to keep
+results small. It installs and updates itself:
+
+- On connect the server's instructions announce the current skill version
+  (server version + hash of the skill text). If
+  `~/.claude/skills/using-netbox-mcp/SKILL.md` is missing or carries another
+  `netbox-skill-version`, the model calls `get_skill` and writes the returned
+  content to that path. Every new release therefore ships its matching skill.
+- Claude Code asks before writing the file unless that path is allowed, and
+  loads a newly written skill from the next session on.
+
+Manual install or check:
+
+```sh
+netbox-mcp skill --install          # write it if missing or outdated
+netbox-mcp skill --check            # compare installed vs current
+mkdir -p ~/.claude/skills/using-netbox-mcp
+podman run --rm ghcr.io/imunhatep/netbox-mcp-go:latest skill \
+  > ~/.claude/skills/using-netbox-mcp/SKILL.md
+```
+
 ## Tools
 
 All list tools accept an optional 1-based `page` plus `brief` and return
 `{count, page, page_size, has_next, results}`. Filters that reference another
-object (`region`, `group`, `site`, `location`, `parent`, `rack`, `role`, `vrf`,
-`cluster`, `tenant`, `device`, `vm`) accept either a numeric id or the
-slug/name.
+object (`region`, `group`, `site`, `location`, `parent`, `rack`, `role`,
+`cluster`, `type`, `tenant`, `device`, `vm`) accept either a numeric id or the
+slug/name. `vrf` takes the id or the route distinguisher — NetBox does not
+filter by VRF name.
+
+`list_devices`, `list_virtual_machines`, `list_ip_addresses`, `list_prefixes`
+and `list_clusters` also take `fields` (top-level field names, NetBox 4.0+),
+which returns only those attributes and overrides `brief`. Array arguments
+(`fields`, `names`, `ids`, `addresses`, `types`) also accept a comma-separated
+string.
 
 ### Search
 
 | Tool | Description |
 |---|---|
-| `search` | Global free-text search fanned out concurrently across regions, site groups, sites, locations, racks, devices, prefixes, IPs, VLANs, VRFs, clusters, VMs, tenant groups, tenants and contacts; brief results grouped by object type with per-type match counts; `limit` per type (default 10) |
+| `search` | Global free-text search fanned out concurrently across regions, site groups, sites, locations, racks, devices, prefixes, IPs, VLANs, VRFs, clusters, VMs, tenant groups, tenants and contacts; brief results grouped by object type with per-type match counts; `limit` per type (default 10), `types` to narrow. An IP or CIDR query only searches prefixes and IP addresses. A type that fails is reported in its group's `error` |
 
 ### Organization (DCIM)
 
@@ -129,7 +162,7 @@ node's direct children, and omitting it returns the flat list.
 | Tool | Description |
 |---|---|
 | `list_racks` | List racks; `search`, `site`, `location` |
-| `list_devices` | List devices; `search`, `region`, `site`, `location`, `rack`, `role`, `tenant`, `status`, `tag` |
+| `list_devices` | List devices; `names`/`ids` (batch: many devices in one call), `fields`, `search`, `region`, `site`, `location`, `rack`, `role`, `tenant`, `status`, `tag` |
 | `get_device` | One device by id or exact name |
 | `list_device_interfaces` | Interfaces of a device |
 
@@ -137,9 +170,10 @@ node's direct children, and omitting it returns the flat list.
 
 | Tool | Description |
 |---|---|
-| `list_prefixes` | List subnets; `search`, `within` (parent CIDR), `site`, `vrf`, `status`, `family`, `tag` |
+| `list_prefixes` | List subnets; `search`, `within` (parent CIDR), `contains` (IP/CIDR), `site`, `vrf`, `status`, `family`, `tag`, `fields` |
 | `get_prefix` | One prefix by id or exact CIDR |
-| `list_ip_addresses` | List IPs; `search`, `parent` (prefix), `device`, `vm`, `vrf`, `status`, `dns_name`, `tag` |
+| `list_ip_addresses` | List IPs; `search`, `parent` (prefix), `device`, `vm`, `vrf`, `status`, `dns_name`, `tag`, `fields` |
+| `lookup_ip_addresses` | Up to 100 addresses in one call: each address's IP objects, or for an unregistered address the prefixes that contain it |
 | `get_ip_address` | One IP by id or address |
 | `list_vlans` | List VLANs; `search`, `site`, `vid` |
 | `list_vrfs` | List VRFs; `search` |
@@ -148,8 +182,8 @@ node's direct children, and omitting it returns the flat list.
 
 | Tool | Description |
 |---|---|
-| `list_clusters` | List clusters; `search`, `site` |
-| `list_virtual_machines` | List VMs; `search`, `cluster`, `site`, `tenant`, `status`, `tag` |
+| `list_clusters` | List clusters; `search`, `type`, `group`, `site`, `tenant`, `status`, `tag`, `fields` |
+| `list_virtual_machines` | List VMs; `names`/`ids` (batch), `fields`, `search`, `cluster`, `site`, `tenant`, `status`, `tag` |
 | `get_virtual_machine` | One VM by id or exact name |
 | `list_vm_interfaces` | Interfaces of a VM |
 
@@ -162,6 +196,7 @@ node's direct children, and omitting it returns the flat list.
 | `get_tenant` | One tenant by id or slug |
 | `list_contacts` | List contacts (people/teams assignable to objects); `search`, `group` |
 | `netbox_status` | NetBox version and installed plugins |
+| `get_skill` | The embedded `using-netbox-mcp` skill, matched to this server version (no NetBox call) |
 
 ### Changelog
 
@@ -183,3 +218,4 @@ Layout mirrors [gitlab-mcp](https://github.com/imunhatep/gitlab-mcp):
 - `internal/netboxx` — lightweight NetBox REST client (full-object passthrough)
 - `internal/mcpserver` — MCP server, transports, request logging
 - `internal/mcpserver/tools` — tool definitions per NetBox domain
+- `internal/skill` + `skills/using-netbox-mcp` — embedded agent skill, version marker, installer

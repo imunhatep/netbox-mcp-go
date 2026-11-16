@@ -332,7 +332,7 @@ func TestSearch(t *testing.T) {
 		_, _ = w.Write([]byte(`{"count":0,"next":null,"results":[]}`))
 	})
 
-	groups, err := svc.Search(context.Background(), "core", 5)
+	groups, err := svc.Search(context.Background(), SearchFilter{Query: "core", PerType: 5})
 	require.NoError(t, err)
 
 	// Only the object type with matches is returned; empty groups are dropped.
@@ -344,20 +344,187 @@ func TestSearch(t *testing.T) {
 	assert.NotContains(t, groups[0].Results[0], "url")
 }
 
+// One failing type is reported in its own group; the others still answer.
 func TestSearchPartialFailure(t *testing.T) {
 	svc := testService(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/api/ipam/vrfs/" {
+		switch r.URL.Path {
+		case "/api/ipam/vrfs/":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"detail":"no perms"}`))
+		case "/api/dcim/devices/":
+			_, _ = w.Write([]byte(`{"count":1,"next":null,"results":[{"id":1,"name":"x1"}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"count":0,"next":null,"results":[]}`))
+		}
+	})
+
+	groups, err := svc.Search(context.Background(), SearchFilter{Query: "x", PerType: 5})
+	require.NoError(t, err)
+	require.Len(t, groups, 2)
+	assert.Equal(t, "devices", groups[0].ObjectType)
+	assert.Equal(t, "vrfs", groups[1].ObjectType)
+	assert.Contains(t, groups[1].Error, "no perms")
+}
+
+// When every type fails the search fails, with each type named.
+func TestSearchAllFail(t *testing.T) {
+	svc := testService(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"detail":"no perms"}`))
+	})
+
+	_, err := svc.Search(context.Background(), SearchFilter{Query: "x", Types: []string{"vrfs", "sites"}})
+	require.ErrorIs(t, err, ErrForbidden)
+	assert.Contains(t, err.Error(), "vrfs")
+	assert.Contains(t, err.Error(), "sites")
+}
+
+// An address-shaped query skips the types whose search cannot match it.
+func TestSearchRoutesAddressQueries(t *testing.T) {
+	for _, query := range []string{"10.1.2.3", "10.1.0.0/16", "2001:db8::1"} {
+		var mu sync.Mutex
+		var paths []string
+		svc := testService(t, func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			paths = append(paths, r.URL.Path)
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"count":0,"next":null,"results":[]}`))
+		})
+		_, err := svc.Search(context.Background(), SearchFilter{Query: query})
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{"/api/ipam/prefixes/", "/api/ipam/ip-addresses/"}, paths, query)
+	}
+}
+
+func TestSearchTypes(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+	svc := testService(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"count":0,"next":null,"results":[]}`))
+	})
+
+	_, err := svc.Search(context.Background(), SearchFilter{Query: "web", Types: []string{"virtual_machines"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/api/virtualization/virtual-machines/"}, paths)
+
+	_, err = svc.Search(context.Background(), SearchFilter{Query: "web", Types: []string{"servers"}})
+	require.ErrorIs(t, err, ErrValidation)
+}
+
+// Batch lookups send repeated filters, and fields replaces brief.
+func TestListDevicesBatchAndFields(t *testing.T) {
+	svc := testService(t, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		assert.Equal(t, "/api/dcim/devices/", r.URL.Path)
+		assert.Equal(t, []string{"1", "2"}, q["id"])
+		assert.Equal(t, []string{"sw-a", "sw-b"}, q["name"])
+		assert.Equal(t, "id,name,primary_ip4", q.Get("fields"))
+		assert.Empty(t, q.Get("brief"), "fields overrides brief")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"count":0,"next":null,"results":[]}`))
+	})
+
+	_, err := svc.ListDevices(context.Background(), DeviceFilter{
+		IDs:    []string{"1", " 2 ", ""},
+		Names:  []string{"sw-a", "sw-b"},
+		Fields: []string{"name", "id", "primary_ip4"},
+		Brief:  true,
+	}, 1)
+	require.NoError(t, err)
+}
+
+func TestFieldsRejectsNestedPaths(t *testing.T) {
+	svc := testService(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("no request expected")
+	})
+	_, err := svc.ListVirtualMachines(context.Background(), VMFilter{Fields: []string{"site.name"}}, 1)
+	require.ErrorIs(t, err, ErrValidation)
+}
+
+func TestListClustersFilters(t *testing.T) {
+	svc := testService(t, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		assert.Equal(t, "vmware", q.Get("type"))
+		assert.Equal(t, "3", q.Get("group_id"))
+		assert.Equal(t, "acme", q.Get("tenant"))
+		assert.Equal(t, "active", q.Get("status"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"count":0,"next":null,"results":[]}`))
+	})
+	_, err := svc.ListClusters(context.Background(), ClusterFilter{Type: "vmware", Group: "3", Tenant: "acme", Status: "active"}, 1)
+	require.NoError(t, err)
+}
+
+// A registered address returns its IP objects; an unregistered one returns
+// the prefixes that contain it instead.
+func TestLookupIPAddresses(t *testing.T) {
+	svc := testService(t, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/ipam/ip-addresses/" && q.Get("address") == "10.0.0.1":
+			_, _ = w.Write([]byte(`{"count":1,"next":null,"results":[{"id":7,"address":"10.0.0.1/24","url":"x","custom_fields":{"owner":"net"}}]}`))
+		case r.URL.Path == "/api/ipam/ip-addresses/":
+			_, _ = w.Write([]byte(`{"count":0,"next":null,"results":[]}`))
+		case r.URL.Path == "/api/ipam/prefixes/":
+			assert.Equal(t, "10.0.0.2", q.Get("contains"), "the mask is stripped for contains")
+			assert.Contains(t, q.Get("fields"), "prefix")
+			_, _ = w.Write([]byte(`{"count":2,"next":null,"results":[{"id":1,"prefix":"10.0.0.0/8"},{"id":2,"prefix":"10.0.0.0/24","url":"x"}]}`))
+		default:
+			t.Errorf("unexpected request %s", r.URL)
+		}
+	})
+
+	res, err := svc.LookupIPAddresses(context.Background(), []string{"10.0.0.1", " 10.0.0.2/24 "})
+	require.NoError(t, err)
+	require.Len(t, res, 2)
+
+	assert.Equal(t, "10.0.0.1", res[0].Address)
+	assert.True(t, res[0].Found)
+	require.Len(t, res[0].IPAddresses, 1)
+	assert.NotContains(t, res[0].IPAddresses[0], "url")
+	assert.Contains(t, res[0].IPAddresses[0], "custom_fields")
+	assert.Empty(t, res[0].ContainingPrefixes)
+
+	assert.Equal(t, "10.0.0.2/24", res[1].Address)
+	assert.False(t, res[1].Found)
+	require.Len(t, res[1].ContainingPrefixes, 2)
+	assert.NotContains(t, res[1].ContainingPrefixes[1], "url")
+}
+
+func TestLookupIPAddressesValidation(t *testing.T) {
+	svc := testService(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("no request expected")
+	})
+	_, err := svc.LookupIPAddresses(context.Background(), nil)
+	require.ErrorIs(t, err, ErrValidation)
+	_, err = svc.LookupIPAddresses(context.Background(), []string{"10.0.0.1", "web-01"})
+	require.ErrorIs(t, err, ErrValidation)
+	_, err = svc.LookupIPAddresses(context.Background(), make([]string, MaxLookupAddresses+1))
+	require.ErrorIs(t, err, ErrValidation)
+}
+
+// A failure on one address is reported on that entry only.
+func TestLookupIPAddressesPartialFailure(t *testing.T) {
+	svc := testService(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("address") == "10.0.0.9" {
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = w.Write([]byte(`{"detail":"no perms"}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"count":0,"next":null,"results":[]}`))
+		_, _ = w.Write([]byte(`{"count":1,"next":null,"results":[{"id":1}]}`))
 	})
-
-	_, err := svc.Search(context.Background(), "x", 5)
-	require.ErrorIs(t, err, ErrForbidden)
-	assert.Contains(t, err.Error(), "vrfs")
+	res, err := svc.LookupIPAddresses(context.Background(), []string{"10.0.0.1", "10.0.0.9"})
+	require.NoError(t, err)
+	assert.True(t, res[0].Found)
+	assert.Contains(t, res[1].Error, "no perms")
 }
 
 func TestSetRef(t *testing.T) {
@@ -503,7 +670,7 @@ func TestContextTokenReachesSearchFanout(t *testing.T) {
 		_, _ = w.Write([]byte(`{"count":0,"next":null,"results":[]}`))
 	})
 
-	_, err := svc.Search(WithToken(context.Background(), "caller"), "x", 5)
+	_, err := svc.Search(WithToken(context.Background(), "caller"), SearchFilter{Query: "x", PerType: 5})
 	require.NoError(t, err)
 	assert.Equal(t, map[string]int{"Token caller": len(searchTargets)}, seen)
 }

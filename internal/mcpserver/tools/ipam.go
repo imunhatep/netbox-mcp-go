@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -9,10 +10,15 @@ import (
 	"github.com/imunhatep/netbox-mcp-go/internal/netboxx"
 )
 
+// vrfDesc documents the "vrf" filter: NetBox matches a non-numeric value
+// against the route distinguisher, not the VRF name.
+const vrfDesc = "filter by VRF id or route distinguisher (RD), e.g. 12 or 65000:100; not the VRF name — resolve a name to its id with list_vrfs"
+
 type IPAMBackend interface {
 	ListPrefixes(ctx context.Context, f netboxx.PrefixFilter, page int) (*netboxx.Page, error)
 	GetPrefix(ctx context.Context, ref string) (netboxx.Object, error)
 	ListIPAddresses(ctx context.Context, f netboxx.IPFilter, page int) (*netboxx.Page, error)
+	LookupIPAddresses(ctx context.Context, addrs []string) ([]netboxx.IPLookup, error)
 	GetIPAddress(ctx context.Context, ref string) (netboxx.Object, error)
 	ListVLANs(ctx context.Context, f netboxx.VLANFilter, page int) (*netboxx.Page, error)
 	ListVRFs(ctx context.Context, f netboxx.VRFFilter, page int) (*netboxx.Page, error)
@@ -27,11 +33,14 @@ func RegisterIPAM(s *server.MCPServer, b IPAMBackend) []string {
 	}
 
 	add(mcp.NewTool("list_prefixes",
-		mcp.WithDescription("List IP prefixes (subnets), filterable by parent prefix, site, VRF, status, address family and tag."),
+		mcp.WithDescription("List IP prefixes (subnets), filterable by parent prefix, containing address, site, VRF, status, address family and tag. "+
+			"To find which network an IP belongs to, pass contains=<ip>."),
 		mcp.WithString("search", mcp.Description("free-text filter (prefix, description)")),
 		mcp.WithString("within", mcp.Description("only prefixes contained in this CIDR (inclusive), e.g. 10.0.0.0/8")),
+		mcp.WithString("contains", mcp.Description("only prefixes that contain this IP or CIDR, e.g. 10.1.2.3; results run from the most general to the most specific")),
 		mcp.WithString("site", mcp.Description("filter by site id or slug")),
-		mcp.WithString("vrf", mcp.Description("filter by VRF id or name")),
+		mcp.WithString("vrf", mcp.Description(vrfDesc)),
+		mcp.WithArray("fields", mcp.WithStringItems(), mcp.Description(fieldsDesc)),
 		mcp.WithString("status", mcp.Description("filter by status, e.g. active, container, reserved, deprecated")),
 		mcp.WithString("family", mcp.Description("IP family: 4 or 6")),
 		mcp.WithString("tag", mcp.Description("filter by tag slug")),
@@ -39,14 +48,16 @@ func RegisterIPAM(s *server.MCPServer, b IPAMBackend) []string {
 		mcp.WithNumber("page", mcp.Description("1-based page number")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		f := netboxx.PrefixFilter{
-			Search: req.GetString("search", ""),
-			Within: req.GetString("within", ""),
-			Site:   req.GetString("site", ""),
-			VRF:    req.GetString("vrf", ""),
-			Status: req.GetString("status", ""),
-			Family: req.GetString("family", ""),
-			Tag:    req.GetString("tag", ""),
-			Brief:  req.GetBool("brief", false),
+			Search:   req.GetString("search", ""),
+			Within:   req.GetString("within", ""),
+			Contains: req.GetString("contains", ""),
+			Site:     req.GetString("site", ""),
+			VRF:      req.GetString("vrf", ""),
+			Status:   req.GetString("status", ""),
+			Family:   req.GetString("family", ""),
+			Tag:      req.GetString("tag", ""),
+			Fields:   optList(req, "fields"),
+			Brief:    req.GetBool("brief", false),
 		}
 		res, err := b.ListPrefixes(ctx, f, optPage(req))
 		if err != nil {
@@ -71,15 +82,18 @@ func RegisterIPAM(s *server.MCPServer, b IPAMBackend) []string {
 	})
 
 	add(mcp.NewTool("list_ip_addresses",
-		mcp.WithDescription("List IP addresses, filterable by containing prefix, device, virtual machine, VRF, status and tag."),
-		mcp.WithString("search", mcp.Description("free-text filter (address, DNS name, description)")),
+		mcp.WithDescription("List IP addresses, filterable by containing prefix, device, virtual machine, VRF, status and tag. "+
+			"To check specific addresses use lookup_ip_addresses, not search: search is a prefix match on text "+
+			"(10.1.2.3 also matches 10.1.2.30-39)."),
+		mcp.WithString("search", mcp.Description("free-text filter (address prefix match, DNS name, description)")),
 		mcp.WithString("parent", mcp.Description("only IPs within this prefix, e.g. 10.1.0.0/24")),
 		mcp.WithString("device", mcp.Description("only IPs assigned to this device (id or name)")),
 		mcp.WithString("vm", mcp.Description("only IPs assigned to this virtual machine (id or name)")),
-		mcp.WithString("vrf", mcp.Description("filter by VRF id or name")),
+		mcp.WithString("vrf", mcp.Description(vrfDesc)),
 		mcp.WithString("status", mcp.Description("filter by status, e.g. active, reserved, deprecated, dhcp, slaac")),
 		mcp.WithString("dns_name", mcp.Description("filter by exact DNS name")),
 		mcp.WithString("tag", mcp.Description("filter by tag slug")),
+		mcp.WithArray("fields", mcp.WithStringItems(), mcp.Description(fieldsDesc)),
 		mcp.WithBoolean("brief", mcp.Description(briefDesc)),
 		mcp.WithNumber("page", mcp.Description("1-based page number")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -92,6 +106,7 @@ func RegisterIPAM(s *server.MCPServer, b IPAMBackend) []string {
 			Status:  req.GetString("status", ""),
 			DNSName: req.GetString("dns_name", ""),
 			Tag:     req.GetString("tag", ""),
+			Fields:  optList(req, "fields"),
 			Brief:   req.GetBool("brief", false),
 		}
 		res, err := b.ListIPAddresses(ctx, f, optPage(req))
@@ -101,8 +116,28 @@ func RegisterIPAM(s *server.MCPServer, b IPAMBackend) []string {
 		return jsonResult(res)
 	})
 
+	add(mcp.NewTool("lookup_ip_addresses",
+		mcp.WithDescription("Look up many IP addresses in ONE call: for each address, the IP objects registered for it "+
+			"(full objects: assignment, DNS name, status, tenant, custom_fields), or, when it is not registered, "+
+			"the prefixes that contain it. Use this instead of calling list_ip_addresses or get_ip_address per address, "+
+			"and do not probe neighbouring addresses: a miss already says which network the address is in."),
+		mcp.WithArray("addresses", mcp.Required(), mcp.WithStringItems(),
+			mcp.Description("IP addresses, with or without mask, e.g. [\"10.1.0.5\",\"10.1.0.6/24\"]; a bare address matches any mask length")),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		addrs := optList(req, "addresses")
+		if len(addrs) == 0 {
+			return errResult(errors.New("addresses is required"))
+		}
+		res, err := b.LookupIPAddresses(ctx, addrs)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(res)
+	})
+
 	add(mcp.NewTool("get_ip_address",
-		mcp.WithDescription("Get one IP address by numeric id or address (with or without mask), with all fields including custom_fields and tags."),
+		mcp.WithDescription("Get one IP address by numeric id or address (with or without mask), with all fields including custom_fields and tags. "+
+			"For several addresses, or to learn the network of an unregistered address, use lookup_ip_addresses."),
 		mcp.WithString("ip", mcp.Required(), mcp.Description("IP id or address, e.g. 101, 10.1.0.5 or 10.1.0.5/24")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		ref, err := req.RequireString("ip")

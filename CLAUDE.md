@@ -38,6 +38,9 @@ block in the mirror file under [tools/](internal/mcpserver/tools/). Also extend
 the domain's backend interface (e.g. `tools.DCIMBackend` in
 [tools/dcim.go](internal/mcpserver/tools/dcim.go)) — the tool packages depend on
 these narrow interfaces, not on `*netboxx.Service`, so tests can substitute fakes.
+Finally, mention the tool in the skill
+([skills/using-netbox-mcp/SKILL.md](skills/using-netbox-mcp/SKILL.md)):
+`TestSkillCoversEveryTool` fails for any registered tool the skill does not name.
 
 ### netboxx conventions
 
@@ -79,10 +82,24 @@ these narrow interfaces, not on `*netboxx.Service`, so tests can substitute fake
   404 fallback (see `changelogPaths` in [core.go](internal/netboxx/core.go),
   where ObjectChange moved from `extras` to `core` in NetBox 4.0). Only
   `ErrNotFound` falls through; any other error is returned as-is.
+- **Batch, don't loop.** List filters that look up known objects take a
+  slice and go out as repeated params via `setMulti` (`id=1&id=2`, NetBox
+  ORs them): `DeviceFilter.IDs/Names`, `VMFilter.IDs/Names`. High-volume list
+  filters carry `Fields []string`, sent through `setFields` as NetBox's
+  `?fields=` (top-level names only; it overrides `brief`; nested paths are
+  rejected with `ErrValidation`). Tool handlers read list args with
+  `optList`, which also accepts a comma-separated string.
+- NetBox's `vrf` filter on prefixes/IPs matches the route distinguisher, not
+  the VRF name; `setRef` sends `vrf_id` for numerics and the RD otherwise.
+- `LookupIPAddresses` resolves many addresses with bounded concurrency; an
+  address with no IP object gets its containing prefixes (`contains=`)
+  instead, and a per-address failure goes in that entry's `error`.
 - [search.go](internal/netboxx/search.go) fans out concurrently over
   `searchTargets` because NetBox's REST API has no cross-type search endpoint.
   New object types should be added to that slice as well as getting their own
-  list tool.
+  list tool. An IP/CIDR query only hits `addressTypes`; `SearchFilter.Types`
+  narrows explicitly. One failing type is reported in its group's `error`;
+  only all types failing fails the search.
 
 ### mcpserver
 
@@ -98,10 +115,25 @@ so callers query NetBox with their own permissions. It is off by default and
 
 Tool handlers never return a Go error to the MCP layer — failures come back as
 `errResult(err)` (an `mcp.NewToolResultError`) so the model sees the message.
-Results are `jsonResult(v)`, indented JSON as text.
+Results are `jsonResult(v)`, indented JSON as text. Because of that, the info
+log line of every tool call carries `is_error` (warn level when true), the
+error text and the call's arguments.
 
 **The server is read-only by design.** Every tool is a GET; do not add write
 tools without an explicit request.
+
+### Skill
+
+The agent skill lives in [skills/using-netbox-mcp/SKILL.md](skills/using-netbox-mcp/SKILL.md),
+embedded by the root `skills` package (`go:embed` cannot reach `..`, so it is
+not under `internal/`). [internal/skill](internal/skill/skill.go) renders the
+`{{VERSION}}` marker as `<server version>+<sha256 of the template>`, so it
+changes with every release and every edit. The server's `instructions`
+(sent in `initialize`) carry that version and tell the client to call
+`get_skill` and rewrite `~/.claude/skills/using-netbox-mcp/SKILL.md` when its
+copy differs; `netbox-mcp skill [--install|--check]` is the manual path.
+The install path is a constant: never let request input choose it. Keep
+the skill in step with tool changes.
 
 ## Tests
 
